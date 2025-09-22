@@ -48,6 +48,32 @@ export async function createPoll(_poll: Omit<Poll, "id" | "createdAt">): Promise
   return { id: "temp", question: _poll.question, options: _poll.options, createdAt: new Date().toISOString() };
 }
 
+export async function castVote(pollId: string, optionIndex: number): Promise<Poll> {
+  if (!Number.isInteger(optionIndex) || optionIndex < 0) {
+    throw new Error("optionIndex must be a non-negative integer");
+  }
+
+  const response = await fetch(`/Poll/${encodeURIComponent(pollId)}/vote`, {
+    method: "POST",
+    headers: {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ optionIndex }),
+    cache: "no-store",
+  });
+
+  if (response.status === 404) {
+    throw new Error(`Poll not found: ${pollId}`);
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to cast vote: ${response.status} ${response.statusText}`);
+  }
+
+  const raw = await response.json();
+  return parsePoll(raw);
+}
+
 function parsePoll(data: unknown): Poll {
   const obj = data as Record<string, unknown>;
 
