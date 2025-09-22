@@ -7,6 +7,15 @@ export type PollPage = {
   limit: number;
 };
 
+export type PollResults = {
+  id: string;
+  question: string;
+  options: string[];
+  counts: number[];
+  total: number;
+  createdAt?: string;
+};
+
 export async function listPolls(skip = 0, limit = 10): Promise<Poll[]> {
   const page = await listPaginatedPolls(skip, limit);
   return page.items;
@@ -74,6 +83,24 @@ export async function castVote(pollId: string, optionIndex: number): Promise<Pol
   return parsePoll(raw);
 }
 
+export async function getPollResults(pollId: string): Promise<PollResults> {
+  const response = await fetch(`/Poll/${encodeURIComponent(pollId)}/results`, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+
+  if (response.status === 404) {
+    throw new Error(`Poll not found: ${pollId}`);
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to fetch poll results: ${response.status} ${response.statusText}`);
+  }
+
+  const raw = await response.json();
+  return parsePollResults(raw);
+}
+
 function parsePoll(data: unknown): Poll {
   const obj = data as Record<string, unknown>;
 
@@ -118,4 +145,46 @@ function parsePollPage(data: unknown, defaultSkip: number, defaultLimit: number)
   const limit = typeof limitRaw === "number" ? limitRaw : defaultLimit;
 
   return { items, total, skip, limit };
+}
+
+function parsePollResults(data: unknown): PollResults {
+  const obj = data as Record<string, unknown>;
+
+  // Try common shapes
+  // Shape A: { id, question, options, counts, total, createdAt? }
+  const maybeCounts = (obj.counts as number[]) || (obj.results as number[]);
+  const maybeVotesArray = obj.votes as Array<{ optionIndex: number; count: number }> | undefined;
+
+  const id = typeof obj.id === "string" ? obj.id : "";
+  const question = typeof obj.question === "string" ? obj.question : "";
+  const options = Array.isArray(obj.options) && obj.options.every((o) => typeof o === "string")
+    ? (obj.options as string[])
+    : [];
+
+  let counts: number[] = [];
+  if (Array.isArray(maybeCounts) && maybeCounts.every((n) => typeof n === "number")) {
+    counts = maybeCounts;
+  } else if (Array.isArray(maybeVotesArray)) {
+    const maxIndex = maybeVotesArray.reduce((m, v) => Math.max(m, v.optionIndex), -1);
+    counts = Array.from({ length: Math.max(maxIndex + 1, options.length) }, () => 0);
+    for (const v of maybeVotesArray) {
+      if (Number.isInteger(v.optionIndex) && v.optionIndex >= 0 && typeof v.count === "number") {
+        counts[v.optionIndex] = v.count;
+      }
+    }
+  }
+
+  const createdAt = typeof obj.createdAt === "string" ? obj.createdAt : undefined;
+  const total = typeof obj.total === "number" ? obj.total : counts.reduce((a, b) => a + b, 0);
+
+  if (!id || !question || options.length === 0 || counts.length === 0) {
+    throw new Error("Invalid poll results response shape");
+  }
+
+  // If counts shorter than options, pad with zeros
+  if (counts.length < options.length) {
+    counts = counts.concat(Array.from({ length: options.length - counts.length }, () => 0));
+  }
+
+  return { id, question, options, counts, total, createdAt };
 }
